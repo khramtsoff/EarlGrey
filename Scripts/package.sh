@@ -36,7 +36,7 @@ export OUTPUT_DIR="${OUTPUT_TMP_DIR}/build"
 
 # Copy files to the temp dir and zip.
 mkdir -p "${OUTPUT_PACKAGE_DIR}"
-(cd "${SOURCE_DIR}/.." && cp "${PACKAGE_FILES}" "${OUTPUT_PACKAGE_DIR}")
+(cd "${SOURCE_DIR}/.." && cp ${PACKAGE_FILES} "${OUTPUT_PACKAGE_DIR}")
 
 # Symlink the framework so we don't need to copy.
 ln -s "${OUTPUT_DIR}/EarlGrey.framework" "${OUTPUT_PACKAGE_DIR}/EarlGrey.framework"
