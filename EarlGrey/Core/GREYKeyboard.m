@@ -32,6 +32,7 @@
 #import "Synchronization/GREYAppStateTrackerObject.h"
 #import "Synchronization/GREYCondition.h"
 #import "Synchronization/GREYUIThreadExecutor.h"
+#import "Synchronization/GREYRunLoopSpinner.h"
 
 /**
  *  Action for tapping a keyboard key.
@@ -62,12 +63,17 @@ static NSDictionary *gModifierKeyIdentifierMapping;
  *  A retry time interval in which we re-tap the shift key to ensure
  *  the alphabetic keyplane changed.
  */
-static const NSTimeInterval kMaxShiftKeyToggleDuration = 0.2;
+static const NSTimeInterval kMaxShiftKeyToggleDuration = 3.0;
 
 /**
  * Time to wait for the keyboard to appear or disappear.
  */
 static const NSTimeInterval kKeyboardWillAppearOrDisappearTimeout = 10.0;
+
+/**
+ * Time to spin for the keyboard to change layout.
+ */
+static const NSTimeInterval kKeyboardLayoutChangeTimeout = 0.1;
 
 /**
  *  Identifier for characters that signify a space key.
@@ -150,8 +156,7 @@ static NSString *const kReturnKeyIdentifier = @"\n";
     // Note: more, numbers label must be after shift and SHIFT labels, because it is also used for
     // the key for switching between keyplanes.
     gShiftKeyLabels =
-	    @[@"shift", @"Shift", @"SHIFT", @"more, symbols", @"more, numbers", @"more", @"MORE",
-		  @"more, letters", @"сдвиг", @"сдвиг , Caps lock on", @"еще, символы", @"еще, цифры", @"еще, буквы"];
+        @[ @"shift", @"Shift", @"SHIFT", @"more, symbols", @"more, numbers", @"more", @"MORE", @"more, letters", @"сдвиг", @"сдвиг , Caps lock on", @"еще, символы", @"еще, цифры", @"еще, буквы" ];
 
     NSCharacterSet *lowerCaseSet = [NSCharacterSet lowercaseLetterCharacterSet];
     gAlphabeticKeyplaneCharacters = [NSMutableCharacterSet uppercaseLetterCharacterSet];
@@ -191,15 +196,14 @@ static NSString *const kReturnKeyIdentifier = @"\n";
   for (NSUInteger i = 0; ((i < string.length)); i++) {
     NSString *characterAsString = [NSString stringWithFormat:@"%C", [string characterAtIndex:i]];
     NSLog(@"Attempting to type key %@.", characterAsString);
-
-    BOOL success = [self typeCharacterAsString:characterAsString
-                                  inFullString: string
-                              inFirstResponder:firstResponder
-                                         error:errorOrNil
-                         trySwitchingLaunguage:YES];
-    if (!success) {
-      return NO;
-    }
+      BOOL success = [self typeCharacterAsString:characterAsString
+                                    inFullString: string
+                                inFirstResponder:firstResponder
+                                           error:errorOrNil
+                           trySwitchingLaunguage:YES];
+      if (!success) {
+          return NO;
+      }
   }
   return YES;
 }
@@ -209,8 +213,8 @@ static NSString *const kReturnKeyIdentifier = @"\n";
              inFirstResponder:(id)firstResponder
                         error:(__strong NSError **)errorOrNil
         trySwitchingLaunguage:(BOOL)trySwitchingLaunguage {
-      __block BOOL success = YES;
-    id key = [GREYKeyboard grey_findKeyForCharacter:characterAsString];
+    __block BOOL success = YES;
+    id key = [GREYKeyboard grey_waitAndfindKeyForCharacter:characterAsString];
     // If key is not on the screen, try looking for it on another keyplane.
     if (!key) {
       unichar currentCharacter = [characterAsString characterAtIndex:0];
@@ -218,15 +222,15 @@ static NSString *const kReturnKeyIdentifier = @"\n";
         GREYLogVerbose(@"Detected an alphabetic key.");
         // Switch to alphabetic keyplane if we are on numbers/symbols keyplane.
         if (![GREYKeyboard grey_isAlphabeticKeyplaneShown]) {
-          id moreLettersKey = [GREYKeyboard grey_findKeyForCharacter:@"more, letters"]
-          ?: [GREYKeyboard grey_findKeyForCharacter:@"еще, буквы"];
+          id moreLettersKey = [GREYKeyboard grey_waitAndfindKeyForCharacter:@"more, letters"]
+            ?: [GREYKeyboard grey_waitAndfindKeyForCharacter:@"еще, буквы"];
           if (!moreLettersKey) {
             return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:@"more, letters"
                                                                    forTypingString:string
                                                                              error:errorOrNil];
           }
           [GREYKeyboard grey_tapKey:moreLettersKey error:errorOrNil];
-          key = [GREYKeyboard grey_findKeyForCharacter:characterAsString];
+          key = [GREYKeyboard grey_waitAndfindKeyForCharacter:characterAsString];
         }
         // If key is not on the current keyplane, use shift to switch to the other one.
         if (!key) {
@@ -237,15 +241,15 @@ static NSString *const kReturnKeyIdentifier = @"\n";
         GREYLogVerbose(@"Detected a non-alphabetic key.");
         // Switch to numbers/symbols keyplane if we are on alphabetic keyplane.
         if ([GREYKeyboard grey_isAlphabeticKeyplaneShown]) {
-          id moreNumbersKey = [GREYKeyboard grey_findKeyForCharacter:@"more, numbers"]
-          ?: [GREYKeyboard grey_findKeyForCharacter:@"еще, цифры"];
+          id moreNumbersKey = [GREYKeyboard grey_waitAndfindKeyForCharacter:@"more, numbers"]
+            ?: [GREYKeyboard grey_waitAndfindKeyForCharacter:@"еще, цифры"];
           if (!moreNumbersKey) {
             return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:@"more, numbers"
                                                                    forTypingString:string
                                                                              error:errorOrNil];
           }
           [GREYKeyboard grey_tapKey:moreNumbersKey error:errorOrNil];
-          key = [GREYKeyboard grey_findKeyForCharacter:characterAsString];
+          key = [GREYKeyboard grey_waitAndfindKeyForCharacter:characterAsString];
         }
         // If key is not on the current keyplane, use shift to switch to the other one.
         if (!key) {
@@ -253,39 +257,38 @@ static NSString *const kReturnKeyIdentifier = @"\n";
             success = NO;
             return success;
           }
-          key = [GREYKeyboard grey_findKeyForCharacter:characterAsString];
+          key = [GREYKeyboard grey_waitAndfindKeyForCharacter:characterAsString];
         }
         // If key is not on either number or symbols keyplane, it could be on alphabetic keyplane.
         // This is the case for @ _ - on UIKeyboardTypeEmailAddress on iPad.
         if (!key) {
-          id moreLettersKey = [GREYKeyboard grey_findKeyForCharacter:@"more, letters"]
-          ?: [GREYKeyboard grey_findKeyForCharacter:@"еще, буквы"];
-
+          id moreLettersKey = [GREYKeyboard grey_waitAndfindKeyForCharacter:@"more, letters"]
+            ?: [GREYKeyboard grey_waitAndfindKeyForCharacter:@"еще, буквы"];
           if (!moreLettersKey) {
             return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:@"more, letters"
                                                                    forTypingString:string
                                                                              error:errorOrNil];
           }
           [GREYKeyboard grey_tapKey:moreLettersKey error:errorOrNil];
-          key = [GREYKeyboard grey_findKeyForCharacter:characterAsString];
+          key = [GREYKeyboard grey_waitAndfindKeyForCharacter:characterAsString];
         }
       }
       // If key is still not shown on screen, show error message.
       if (!key && trySwitchingLaunguage) {
-        id changeLanguageKey = [GREYKeyboard grey_findKeyForCharacter:@"Next keyboard"];
-
-        if (!changeLanguageKey) {
-          return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:@"Next keyboard"
-                                                                 forTypingString:string
-                                                                           error:errorOrNil];
-        }
-        [GREYKeyboard grey_tapKey:changeLanguageKey error:errorOrNil];
-
-        return [self typeCharacterAsString:characterAsString
-                              inFullString: string
-                          inFirstResponder:firstResponder
-                                     error:errorOrNil
-                     trySwitchingLaunguage:NO];
+          id changeLanguageKey = [GREYKeyboard grey_waitAndfindKeyForCharacter:@"Next keyboard"];
+          
+          if (!changeLanguageKey) {
+              return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:@"Next keyboard"
+                                                                     forTypingString:string
+                                                                               error:errorOrNil];
+          }
+          [GREYKeyboard grey_tapKey:changeLanguageKey error:errorOrNil];
+          
+          return [self typeCharacterAsString:characterAsString
+                                inFullString: string
+                            inFirstResponder:firstResponder
+                                       error:errorOrNil
+                       trySwitchingLaunguage:NO];
       }
       if (!key) {
         return [GREYKeyboard grey_setErrorForkeyNotFoundWithAccessibilityLabel:characterAsString
@@ -307,10 +310,22 @@ static NSString *const kReturnKeyIdentifier = @"\n";
     // Keyboard was found; this action should always succeed.
     [GREYKeyboard grey_tapKey:key error:errorOrNil];
 
+    // When space, delete or uppercase letter is typed, the keyboard will automatically change to
+    // lower alphabet keyplane.
+    // On iPad the layout changes faster than accessibility, so we need to wait for
+    // accessibility change.
+    unichar character = [characterAsString characterAtIndex:0];
+    if ([characterAsString isEqualToString:kSpaceKeyIdentifier] ||
+        [characterAsString isEqualToString:kDeleteKeyIdentifier] ||
+        [[NSCharacterSet uppercaseLetterCharacterSet] characterIsMember:character]) {
+      [GREYKeyboard grey_waitAndfindKeyForCharacter:@"e"];
+    }
+
     if (keyboardTypeWasChangedFromEmailType) {
       // Set the keyboard type back to the Email Type.
       [firstResponder setKeyboardType:UIKeyboardTypeEmailAddress];
     }
+
   return success;
 }
 
@@ -348,7 +363,7 @@ static NSString *const kReturnKeyIdentifier = @"\n";
   GREYCondition *shiftToggleSucceded =
       [GREYCondition conditionWithName:@"Shift key toggled keyplane" block:^BOOL() {
      [GREYKeyboard grey_toggleShiftKeyWithError:&error];
-     key = [GREYKeyboard grey_findKeyForCharacter:accessibilityLabel];
+     key = [GREYKeyboard grey_waitAndfindKeyForCharacter:accessibilityLabel];
      return (key != nil) || (error != nil);
    }];
 
@@ -383,7 +398,7 @@ static NSString *const kReturnKeyIdentifier = @"\n";
   [[keyboard _layout] setValue:[NSNumber numberWithDouble:0.0] forKey:@"_shiftLockFirstTapTime"];
 
   for (NSString *shiftKeyLabel in gShiftKeyLabels) {
-    id key = [GREYKeyboard grey_findKeyForCharacter:shiftKeyLabel];
+    id key = [GREYKeyboard grey_waitAndfindKeyForCharacter:shiftKeyLabel];
     if (key) {
       // Shift key was found; this action should always succeed.
       [GREYKeyboard grey_tapKey:key error:errorOrNil];
@@ -398,13 +413,14 @@ static NSString *const kReturnKeyIdentifier = @"\n";
 }
 
 /**
- *  Get the key on the keyboard for a character to be typed.
+ *  Get the key on the keyboard for a character to be typed. Will wait for the character if it is
+ *  not on the keyboard layout yet.
  *
  *  @param character The character that needs to be typed.
  *
  *  @return A UI element that signifies the key to be tapped for typing action.
  */
-+ (id)grey_findKeyForCharacter:(NSString *)character {
++ (id)grey_waitAndfindKeyForCharacter:(NSString *)character {
   GREYFatalAssert(character);
 
   BOOL ignoreCase = NO;
@@ -412,23 +428,23 @@ static NSString *const kReturnKeyIdentifier = @"\n";
   // accessibility label to the corresponding modifier key accessibility label.
   NSArray *modifierKeyIdentifiers = [gModifierKeyIdentifierMapping objectForKey:character];
   if (modifierKeyIdentifiers.count > 0) {
-    for (NSUInteger i = 0; i < modifierKeyIdentifiers.count; ++i) {
-      NSString *modifierKeyIdentifier = modifierKeyIdentifiers[i];
-      // Check for the return key since we can have a different accessibility label
-      // depending upon the keyboard.
-      UIKeyboardImpl *currentKeyboard = [GREYKeyboard grey_keyboardObject];
-      if ([character isEqualToString:kReturnKeyIdentifier]) {
-        modifierKeyIdentifier = [currentKeyboard returnKeyDisplayName];
+      for (NSUInteger i = 0; i < modifierKeyIdentifiers.count; ++i) {
+          NSString *modifierKeyIdentifier = modifierKeyIdentifiers[i];
+          // Check for the return key since we can have a different accessibility label
+          // depending upon the keyboard.
+          UIKeyboardImpl *currentKeyboard = [GREYKeyboard grey_keyboardObject];
+          if ([character isEqualToString:kReturnKeyIdentifier]) {
+              modifierKeyIdentifier = [currentKeyboard returnKeyDisplayName];
+          }
+          character = modifierKeyIdentifier;
+          ignoreCase = YES;
+          
+          id result = [self grey_keyForCharacterValue:character
+                  inKeyboardLayoutWithCaseSensitivity:ignoreCase];
+          if (result != nil) {
+              return result;
+          }
       }
-      character = modifierKeyIdentifier;
-      ignoreCase = YES;
-
-      id result = [self grey_keyForCharacterValue:character
-              inKeyboardLayoutWithCaseSensitivity:ignoreCase];
-      if (result != nil) {
-        return result;
-      }
-	}
   }
 
   // iOS 9 changes & to ampersand.
@@ -436,8 +452,14 @@ static NSString *const kReturnKeyIdentifier = @"\n";
     character = @"ampersand";
   }
 
-  return [self grey_keyForCharacterValue:character
-     inKeyboardLayoutWithCaseSensitivity:ignoreCase];
+  __block id result = nil;
+  [GREYKeyboard grey_spinRunloopForKeyboardWithTimeout:kKeyboardLayoutChangeTimeout
+                                  andStoppingCondition:^BOOL {
+    result = [self grey_keyForCharacterValue:character
+         inKeyboardLayoutWithCaseSensitivity:ignoreCase];
+    return result != nil;
+  }];
+  return result;
 }
 
 /**
@@ -482,10 +504,10 @@ static NSString *const kReturnKeyIdentifier = @"\n";
  */
 + (BOOL)grey_isAlphabeticKeyplaneShown {
   // Arbitrarily choose e/E as the key to look for to determine if alphabetic keyplane is shown.
-  return [GREYKeyboard grey_findKeyForCharacter:@"e"] != nil
-	|| [GREYKeyboard grey_findKeyForCharacter:@"E"] != nil
-	|| [GREYKeyboard grey_findKeyForCharacter:@"е"] != nil // Cyrillic
-	|| [GREYKeyboard grey_findKeyForCharacter:@"Е"] != nil; // Cyrillic
+  return [GREYKeyboard grey_waitAndfindKeyForCharacter:@"e"] != nil
+      || [GREYKeyboard grey_waitAndfindKeyForCharacter:@"E"] != nil
+      || [GREYKeyboard grey_waitAndfindKeyForCharacter:@"е"] != nil // Cyrillic
+      || [GREYKeyboard grey_waitAndfindKeyForCharacter:@"Е"] != nil; // Cyrillic
 }
 
 /**
@@ -541,6 +563,20 @@ static NSString *const kReturnKeyIdentifier = @"\n";
                               description,
                               glossary);
   return NO;
+}
+
+/**
+ *  To wait for a keyboard animation or gesture, spin the runloop.
+ *
+ *  @param timeout            The timeout of the runloop spinner.
+ *  @param stopConditionBlock The condition block used to stop the runloop spinner.
+ */
++ (void)grey_spinRunloopForKeyboardWithTimeout:(NSTimeInterval)timeout
+                          andStoppingCondition:(BOOL (^)(void))stopConditionBlock {
+  GREYRunLoopSpinner *runLoopSpinner = [[GREYRunLoopSpinner alloc] init];
+  runLoopSpinner.timeout = timeout;
+  runLoopSpinner.maxSleepInterval = DBL_MAX;
+  [runLoopSpinner spinWithStopConditionBlock:stopConditionBlock];
 }
 
 @end
